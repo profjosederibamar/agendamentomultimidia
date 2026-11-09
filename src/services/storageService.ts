@@ -1,6 +1,12 @@
 import { Booking, ConflictCheckResult, Turno, Aula, AulaRoomAssignment } from '../types/booking.ts';
 import { SCHOOL_RESOURCES } from '../constants/schoolData.ts';
 import { auth } from '../lib/firebase.ts';
+import {
+  isSupabaseConfigured,
+  fetchBookingsFromSupabase,
+  insertBookingsToSupabase,
+  deleteBookingFromSupabase,
+} from '../lib/supabase.ts';
 
 const STORAGE_KEY = 'escola_agendamentos_v3';
 const TEACHER_PROFILE_KEY = 'escola_professor_perfil_v1';
@@ -188,6 +194,19 @@ export const saveBookings = (bookings: Booking[]) => {
  * Sync bookings with Cloud SQL backend
  */
 export const syncBookingsWithServer = async (): Promise<Booking[]> => {
+  // If Supabase is configured via Publishable key, prefer direct Supabase sync!
+  if (isSupabaseConfigured()) {
+    try {
+      const supaBookings = await fetchBookingsFromSupabase();
+      if (Array.isArray(supaBookings) && supaBookings.length > 0) {
+        saveBookings(supaBookings);
+        return supaBookings;
+      }
+    } catch (err) {
+      console.warn('Aviso: falha ao sincronizar via Supabase JS Client:', err);
+    }
+  }
+
   try {
     const res = await fetch('/api/bookings');
     if (res.ok) {
@@ -431,8 +450,18 @@ export const createScheduleBatchBooking = (
     component: input.curriculumComponent.trim(),
   });
 
-  // Asynchronously persist to Cloud SQL database via backend API
+  // Asynchronously persist to Supabase / Cloud SQL database
   (async () => {
+    // 1. Direct Supabase Client if configured
+    if (isSupabaseConfigured()) {
+      try {
+        await insertBookingsToSupabase(newBookings);
+      } catch (e) {
+        console.warn('Falha ao inserir diretamente no Supabase:', e);
+      }
+    }
+
+    // 2. Cloud SQL / Vercel API backend
     try {
       const authHeader = await getAuthHeader();
       await fetch('/api/bookings/batch', {
@@ -463,8 +492,16 @@ export const deleteBooking = (id: string): boolean => {
   if (filtered.length !== current.length) {
     saveBookings(filtered);
 
-    // Asynchronously delete from Cloud SQL database
+    // Asynchronously delete from Supabase and Cloud SQL database
     (async () => {
+      if (isSupabaseConfigured()) {
+        try {
+          await deleteBookingFromSupabase(id);
+        } catch (e) {
+          console.warn('Falha ao excluir diretamente no Supabase:', e);
+        }
+      }
+
       try {
         const authHeader = await getAuthHeader();
         await fetch(`/api/bookings/${id}`, {

@@ -4,9 +4,10 @@ import { BookingForm } from './components/BookingForm';
 import { DayBoardView } from './components/DayBoardView';
 import { ReservationsList } from './components/ReservationsList';
 import { BookingReceiptModal } from './components/BookingReceiptModal';
+import { DatabaseTestModal } from './components/DatabaseTestModal';
 import { Booking, Turno } from './types/booking';
 import { getStoredBookings, getTodayDateString } from './services/storageService';
-import { ShieldCheck, School, Sparkles, Clock } from 'lucide-react';
+import { ShieldCheck, School, Sparkles, Clock, Database } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'form' | 'board' | 'list'>('form');
@@ -21,6 +22,7 @@ export default function App() {
   const [selectedReceiptBooking, setSelectedReceiptBooking] = useState<Booking | null>(null);
   const [batchBookings, setBatchBookings] = useState<Booking[]>([]);
   const [isJustCreatedReceipt, setIsJustCreatedReceipt] = useState(false);
+  const [isDbTestOpen, setIsDbTestOpen] = useState(false);
 
   // Refresh bookings from storage
   const refreshBookings = () => {
@@ -184,10 +186,28 @@ export default function App() {
 
           <div className="border-t border-slate-100 pt-4 flex flex-col sm:flex-row items-center justify-between text-[11px] text-slate-400 gap-2 text-center sm:text-left">
             <p>Sistema de Agendamento Escolar • Equipamentos, Ambientes e Salas de Aula</p>
-            <p className="font-medium text-slate-500">Desenvolvido com máxima praticidade para os professores</p>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsDbTestOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold transition-all cursor-pointer shadow-2xs hover:shadow-xs"
+              >
+                <Database className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Testar Conexão (Supabase / Vercel)</span>
+              </button>
+              <p className="font-medium text-slate-500 hidden sm:block">
+                Desenvolvido com máxima praticidade para os professores
+              </p>
+            </div>
           </div>
         </div>
       </footer>
+
+      {/* Database Diagnostic & Test Modal */}
+      <DatabaseTestModal
+        isOpen={isDbTestOpen}
+        onClose={() => setIsDbTestOpen(false)}
+      />
     </div>
   );
 }
