@@ -1,0 +1,6 @@
+{
+  "name": "Agendamento Escolar - Equipamentos e Ambientes",
+  "description": "Sistema simples e intuitivo para professores reservarem equipamentos (Chromebooks, TV, Datashow, Caixa de Som), ambientes (Pátio, Biblioteca, Laboratório) e salas de aula por turno.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
