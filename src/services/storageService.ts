@@ -1,5 +1,6 @@
-import { Booking, ConflictCheckResult, Turno, Aula, AulaRoomAssignment } from '../types/booking';
-import { SCHOOL_RESOURCES } from '../constants/schoolData';
+import { Booking, ConflictCheckResult, Turno, Aula, AulaRoomAssignment } from '../types/booking.ts';
+import { SCHOOL_RESOURCES } from '../constants/schoolData.ts';
+import { auth } from '../lib/firebase.ts';
 
 const STORAGE_KEY = 'escola_agendamentos_v3';
 const TEACHER_PROFILE_KEY = 'escola_professor_perfil_v1';
@@ -122,6 +123,24 @@ const getInitialSeedBookings = (): Booking[] => {
   ];
 };
 
+/**
+ * Get auth header if user is logged in
+ */
+async function getAuthHeader(): Promise<Record<string, string>> {
+  if (auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      return { Authorization: `Bearer ${token}` };
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/**
+ * Read bookings synchronously from localStorage cache
+ */
 export const getStoredBookings = (): Booking[] => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -157,10 +176,47 @@ export const getStoredBookings = (): Booking[] => {
   }
 };
 
+/**
+ * Save bookings to local storage and notify listeners
+ */
 export const saveBookings = (bookings: Booking[]) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(bookings));
   window.dispatchEvent(new Event('escola_bookings_updated'));
 };
+
+/**
+ * Sync bookings with Cloud SQL backend
+ */
+export const syncBookingsWithServer = async (): Promise<Booking[]> => {
+  try {
+    const res = await fetch('/api/bookings');
+    if (res.ok) {
+      const serverBookings: Booking[] = await res.json();
+      if (Array.isArray(serverBookings) && serverBookings.length > 0) {
+        saveBookings(serverBookings);
+        return serverBookings;
+      } else if (Array.isArray(serverBookings) && serverBookings.length === 0) {
+        // If server database is completely empty on fresh setup, seed initial demo bookings to Cloud SQL
+        const seed = getStoredBookings();
+        if (seed.length > 0) {
+          await fetch('/api/bookings/batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bookings: seed }),
+          }).catch(() => {});
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Servidor offline ou inicializando, usando cache local:', err);
+  }
+  return getStoredBookings();
+};
+
+// Initiate server sync on file load in browser
+if (typeof window !== 'undefined') {
+  syncBookingsWithServer();
+}
 
 /**
  * Check conflicts for a specific resource and its aula-classroom schedule
@@ -252,7 +308,6 @@ export const getOccupiedAulasForClassroom = (
 
   bookings.forEach((b) => {
     if (b.date === date && b.turno === turno) {
-      // If schedule exists, check exact aula assignment
       if (b.schedule && b.schedule.length > 0) {
         b.schedule.forEach((s) => {
           if (s.classroom === classroom) {
@@ -337,7 +392,6 @@ export const createScheduleBatchBooking = (
   const groupId = 'grp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
   const newBookings: Booking[] = [];
 
-  // Extract distinct aulas and distinct classrooms
   const distinctAulas = Array.from(new Set(input.schedule.map((s) => s.aula)));
   const distinctClassrooms = Array.from(new Set(input.schedule.map((s) => s.classroom)));
   const classroomSummary = input.schedule
@@ -377,6 +431,29 @@ export const createScheduleBatchBooking = (
     component: input.curriculumComponent.trim(),
   });
 
+  // Asynchronously persist to Cloud SQL database via backend API
+  (async () => {
+    try {
+      const authHeader = await getAuthHeader();
+      await fetch('/api/bookings/batch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeader,
+        },
+        body: JSON.stringify({
+          bookings: newBookings,
+          teacherProfile: {
+            name: input.teacherName.trim(),
+            component: input.curriculumComponent.trim(),
+          },
+        }),
+      });
+    } catch (err) {
+      console.warn('Aviso: falha ao sincronizar com banco em nuvem imediatamente:', err);
+    }
+  })();
+
   return { success: true, createdBookings: newBookings };
 };
 
@@ -385,6 +462,20 @@ export const deleteBooking = (id: string): boolean => {
   const filtered = current.filter((b) => b.id !== id);
   if (filtered.length !== current.length) {
     saveBookings(filtered);
+
+    // Asynchronously delete from Cloud SQL database
+    (async () => {
+      try {
+        const authHeader = await getAuthHeader();
+        await fetch(`/api/bookings/${id}`, {
+          method: 'DELETE',
+          headers: { ...authHeader },
+        });
+      } catch (err) {
+        console.warn('Aviso: falha ao excluir no banco de dados:', err);
+      }
+    })();
+
     return true;
   }
   return false;

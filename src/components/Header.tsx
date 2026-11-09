@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, Clock, PlusCircle, LayoutGrid, ListFilter, School, Sparkles, Home } from 'lucide-react';
+import { Calendar, Clock, PlusCircle, LayoutGrid, ListFilter, School, Sparkles, Home, LogIn, LogOut } from 'lucide-react';
 import { Turno } from '../types/booking';
+import { useAuth } from '../context/AuthContext.tsx';
 
 interface HeaderProps {
   activeTab: 'form' | 'board' | 'list';
@@ -15,6 +16,7 @@ export const Header: React.FC<HeaderProps> = ({
   totalBookingsCount,
   todayBookingsCount,
 }) => {
+  const { user, signInWithGoogle, logOut } = useAuth();
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
   useEffect(() => {
@@ -94,6 +96,45 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse"></span>
               <span>{todayBookingsCount} hoje</span>
             </div>
+
+            {/* Google Authentication */}
+            {user ? (
+              <div className="flex items-center gap-2 pl-1 border-l border-slate-200">
+                <div className="flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200/80 px-2.5 py-1 rounded-xl transition-all">
+                  {user.photoURL ? (
+                    <img
+                      src={user.photoURL}
+                      alt={user.displayName || 'Professor'}
+                      className="w-5 h-5 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold text-[10px] flex items-center justify-center">
+                      {(user.displayName || user.email || 'P')[0].toUpperCase()}
+                    </div>
+                  )}
+                  <span className="font-bold text-slate-800 max-w-[110px] truncate text-xs">
+                    {user.displayName || user.email?.split('@')[0]}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={logOut}
+                  title="Sair da conta"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={signInWithGoogle}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold transition-all shadow-2xs hover:shadow-xs cursor-pointer active:scale-95"
+              >
+                <LogIn className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Entrar</span>
+              </button>
+            )}
           </div>
         </div>
 

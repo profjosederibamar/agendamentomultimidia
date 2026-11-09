@@ -25,6 +25,7 @@ import {
   Aula,
   AulaRoomAssignment,
 } from '../types/booking';
+import { useAuth } from '../context/AuthContext.tsx';
 import {
   SCHOOL_RESOURCES,
   CLASSROOMS_BY_TURNO,
@@ -58,6 +59,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   preselectedTurno,
   preselectedResourceId,
 }) => {
+  const { user } = useAuth();
   const today = getTodayDateString();
   const tomorrow = getTomorrowDateString();
 
@@ -154,6 +156,13 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     window.addEventListener('escola_bookings_updated', refresh);
     return () => window.removeEventListener('escola_bookings_updated', refresh);
   }, []);
+
+  // Auto pre-fill teacher name if logged in
+  useEffect(() => {
+    if (user?.displayName && !teacherName) {
+      setTeacherName(user.displayName);
+    }
+  }, [user]);
 
   // Compute active schedule assignments
   const activeSchedule: AulaRoomAssignment[] = useMemo(() => {
