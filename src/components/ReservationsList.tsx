@@ -12,6 +12,9 @@ import {
   AlertTriangle,
   Download,
   Home,
+  X as XIcon,
+  Layers,
+  CheckCircle2,
 } from 'lucide-react';
 import { Booking, Turno, Aula } from '../types/booking';
 import { TURNO_CONFIG, AULAS_LIST } from '../constants/schoolData';
@@ -19,6 +22,9 @@ import {
   formatDateDisplay,
   getTodayDateString,
   deleteBooking,
+  deleteBookingGroup,
+  groupBookingsByReservation,
+  GroupedReservation,
 } from '../services/storageService';
 import { ResourceIcon } from './ResourceIcon';
 
@@ -42,21 +48,31 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
   const [selectedTurno, setSelectedTurno] = useState<'all' | Turno>('all');
   const [selectedAula, setSelectedAula] = useState<'all' | Aula>('all');
   const [selectedDateFilter, setSelectedDateFilter] = useState<'all' | 'today' | 'future' | 'past'>('all');
+  const [viewMode, setViewMode] = useState<'grouped' | 'individual'>('grouped');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Filtered bookings
   const filteredBookings = useMemo(() => {
     return bookings.filter((b) => {
-      // Search term
+      // Enhanced Search bar filter: professor, equipamento, sala ou componente
       if (searchTerm.trim()) {
-        const query = searchTerm.toLowerCase();
-        const matchesTeacher = b.teacherName.toLowerCase().includes(query);
-        const matchesComponent = b.curriculumComponent.toLowerCase().includes(query);
-        const matchesResource = b.resourceName.toLowerCase().includes(query);
+        const query = searchTerm.toLowerCase().trim();
+        const matchesTeacher = (b.teacherName || '').toLowerCase().includes(query);
+        const matchesComponent = (b.curriculumComponent || '').toLowerCase().includes(query);
+        const matchesResource = (b.resourceName || '').toLowerCase().includes(query);
+        
+        // Match in classrooms array or single classroom field
         const roomsStr = (b.classrooms || [b.classroom || '']).join(' ').toLowerCase();
-        const matchesRoom = roomsStr.includes(query);
+        const matchesRoomDirect = roomsStr.includes(query);
 
-        if (!matchesTeacher && !matchesComponent && !matchesResource && !matchesRoom) {
+        // Match in linked schedule classrooms & aulas
+        const scheduleRooms = (b.schedule || []).map((s) => `${s.aula} sala ${s.classroom} ${s.classroom}`).join(' ').toLowerCase();
+        const matchesSchedule = scheduleRooms.includes(query);
+
+        // Match in notes
+        const matchesNotes = (b.notes || '').toLowerCase().includes(query);
+
+        if (!matchesTeacher && !matchesComponent && !matchesResource && !matchesRoomDirect && !matchesSchedule && !matchesNotes) {
           return false;
         }
       }
@@ -86,8 +102,13 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
     });
   }, [bookings, searchTerm, selectedTurno, selectedAula, selectedDateFilter, today]);
 
-  const handleDelete = (id: string) => {
-    deleteBooking(id);
+  // Grouped reservations (single card per reservation session)
+  const groupedReservations = useMemo(() => {
+    return groupBookingsByReservation(filteredBookings);
+  }, [filteredBookings]);
+
+  const handleDelete = (idOrGroupId: string) => {
+    deleteBooking(idOrGroupId);
     setDeleteConfirmId(null);
   };
 
@@ -115,7 +136,33 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* View Mode Switcher */}
+            <div className="flex items-center p-1 bg-slate-100 rounded-2xl text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setViewMode('grouped')}
+                className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                  viewMode === 'grouped'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Reservas ({groupedReservations.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('individual')}
+                className={`px-3 py-1.5 rounded-xl transition-all cursor-pointer ${
+                  viewMode === 'individual'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Itens ({filteredBookings.length})
+              </button>
+            </div>
+
             {onGoHome && (
               <button
                 onClick={onGoHome}
@@ -131,7 +178,7 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
               className="px-3.5 py-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <Download className="w-4 h-4 text-slate-500" />
-              <span className="hidden sm:inline">Exportar Dados</span>
+              <span className="hidden sm:inline">Exportar</span>
             </button>
 
             <button
@@ -145,16 +192,26 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
 
         {/* Filter controls */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-          {/* Search bar */}
+          {/* Search bar with quick clear */}
           <div className="md:col-span-5 relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar por professor, disciplina, item ou sala..."
-              className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-200 text-xs sm:text-sm font-medium focus:border-indigo-600 focus:ring-3 focus:ring-indigo-100 outline-hidden"
+              placeholder="Buscar por professor, sala, equipamento ou matéria..."
+              className="w-full pl-10 pr-9 py-2.5 rounded-2xl border-2 border-slate-200 text-xs sm:text-sm font-medium focus:border-indigo-600 focus:ring-4 focus:ring-indigo-100 outline-hidden transition-all placeholder:text-slate-400"
             />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-2.5 p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+                title="Limpar pesquisa"
+              >
+                <XIcon className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
 
           {/* Turno Filter */}
@@ -237,54 +294,314 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
         </div>
 
         {/* Aula Quick filter tags */}
-        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center gap-1.5 flex-wrap text-xs">
-          <span className="text-slate-400 font-semibold mr-1">Filtrar Aula:</span>
-          <button
-            onClick={() => setSelectedAula('all')}
-            className={`px-2.5 py-1 rounded-xl font-bold cursor-pointer transition-all ${
-              selectedAula === 'all'
-                ? 'bg-cyan-600 text-white'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-            }`}
-          >
-            Todas as Aulas
-          </button>
-          {AULAS_LIST.map((aula) => (
+        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap text-xs">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-slate-400 font-semibold mr-1">Filtrar Aula:</span>
             <button
-              key={aula}
-              onClick={() => setSelectedAula(aula)}
+              onClick={() => setSelectedAula('all')}
               className={`px-2.5 py-1 rounded-xl font-bold cursor-pointer transition-all ${
-                selectedAula === aula
-                  ? 'bg-cyan-600 text-white shadow-xs'
+                selectedAula === 'all'
+                  ? 'bg-cyan-600 text-white'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              {aula}
+              Todas as Aulas
             </button>
-          ))}
+            {AULAS_LIST.map((aula) => (
+              <button
+                key={aula}
+                onClick={() => setSelectedAula(aula)}
+                className={`px-2.5 py-1 rounded-xl font-bold cursor-pointer transition-all ${
+                  selectedAula === aula
+                    ? 'bg-cyan-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {aula}
+              </button>
+            ))}
+          </div>
+
+          {/* Results count & active search summary */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-xl">
+              {viewMode === 'grouped'
+                ? `${groupedReservations.length} ${groupedReservations.length === 1 ? 'reserva' : 'reservas'} (${filteredBookings.length} ${filteredBookings.length === 1 ? 'item' : 'itens'})`
+                : `${filteredBookings.length} ${filteredBookings.length === 1 ? 'item agendado' : 'itens agendados'}`}
+            </span>
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+              >
+                Limpar busca
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Bookings List Cards */}
-      {filteredBookings.length === 0 ? (
+      {/* Bookings List Cards (Grouped Mode or Individual Mode) */}
+      {(viewMode === 'grouped' ? groupedReservations.length === 0 : filteredBookings.length === 0) ? (
         <div className="bg-white rounded-3xl p-8 sm:p-12 text-center border border-slate-200/80 shadow-xs max-w-lg mx-auto">
           <div className="w-14 h-14 rounded-3xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-4">
             <Filter className="w-7 h-7" />
           </div>
           <h3 className="text-lg font-bold text-slate-800">
-            Nenhum agendamento encontrado
+            {searchTerm
+              ? `Nenhum agendamento para "${searchTerm}"`
+              : 'Nenhum agendamento encontrado'}
           </h3>
           <p className="text-xs sm:text-sm text-slate-500 mt-1 mb-5">
-            Tente alterar os filtros de pesquisa ou faça uma nova reserva.
+            {searchTerm
+              ? 'Tente buscar por outro nome de professor, número de sala ou equipamento.'
+              : 'Tente alterar os filtros de turno/data ou faça uma nova reserva.'}
           </p>
-          <button
-            onClick={onNewBookingClick}
-            className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-md shadow-indigo-100 cursor-pointer inline-flex items-center gap-2"
-          >
-            <span>Fazer um Agendamento Agora</span>
-          </button>
+          <div className="flex items-center justify-center gap-3">
+            {searchTerm && (
+              <button
+                onClick={() => setSearchTerm('')}
+                className="px-4 py-2 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+              >
+                Limpar Busca
+              </button>
+            )}
+            <button
+              onClick={onNewBookingClick}
+              className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm shadow-md shadow-indigo-100 cursor-pointer inline-flex items-center gap-2"
+            >
+              <span>Fazer um Agendamento Agora</span>
+            </button>
+          </div>
+        </div>
+      ) : viewMode === 'grouped' ? (
+        /* ================= GROUPED RESERVATIONS (ZERO DUPLICATION) ================= */
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
+          {groupedReservations.map((res) => {
+            const turnoCfg = TURNO_CONFIG[res.turno];
+            const isToday = res.date === today;
+            const isPast = res.date < today;
+            const roomsDisplay =
+              res.classrooms && res.classrooms.length > 0
+                ? res.classrooms.join(', ')
+                : 'Sala única';
+            const primaryBooking = res.bookings[0];
+
+            return (
+              <div
+                key={res.groupId}
+                className="bg-white rounded-3xl p-4 sm:p-5 border border-slate-200/80 shadow-xs hover:shadow-md transition-all flex flex-col justify-between"
+              >
+                <div>
+                  {/* Top Shift & Date Badge */}
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <span
+                      className={`text-[11px] font-extrabold px-2.5 py-1 rounded-xl border flex items-center gap-1 ${turnoCfg.badgeBg}`}
+                    >
+                      <span>{turnoCfg.icon === 'Sun' ? '☀️' : turnoCfg.icon === 'Sunset' ? '🌤️' : '🌙'}</span>
+                      <span>{turnoCfg.label}</span>
+                    </span>
+
+                    <span
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded-xl ${
+                        isToday
+                          ? 'bg-emerald-100 text-emerald-800 font-extrabold'
+                          : isPast
+                          ? 'bg-slate-100 text-slate-500'
+                          : 'bg-indigo-50 text-indigo-700'
+                      }`}
+                    >
+                      {formatDateDisplay(res.date)}
+                    </span>
+                  </div>
+
+                  {/* DESTAQUE PRINCIPAL EM 1º LUGAR: NOME DO PROFESSOR */}
+                  <div className="bg-gradient-to-r from-indigo-50/90 via-slate-50 to-indigo-50/50 p-3.5 rounded-2xl border-2 border-indigo-200/90 shadow-xs mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm shadow-indigo-200">
+                        <User className="w-5 h-5 stroke-[2.5]" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-600 block">
+                          Professor(a)
+                        </span>
+                        <h3 className="font-black text-base sm:text-lg text-slate-900 leading-tight truncate">
+                          {res.teacherName}
+                        </h3>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <BookOpen className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="text-xs font-bold text-slate-600 truncate">
+                            {res.curriculumComponent}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Resource Info: Single or Grouped Equipment List */}
+                  {res.bookings.length === 1 ? (
+                    <div className="flex items-center gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200/80 mb-3">
+                      <div
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shrink-0 shadow-sm ${
+                          primaryBooking.resourceType === 'equipamento'
+                            ? 'bg-indigo-600'
+                            : 'bg-emerald-600'
+                        }`}
+                      >
+                        <ResourceIcon
+                          iconName={
+                            primaryBooking.resourceId === 'chromebook'
+                              ? 'laptop'
+                              : primaryBooking.resourceId === 'tv'
+                              ? 'tv'
+                              : primaryBooking.resourceId === 'datashow'
+                              ? 'projector'
+                              : primaryBooking.resourceId === 'caixa_som'
+                              ? 'speaker'
+                              : primaryBooking.resourceId === 'patio'
+                              ? 'sun'
+                              : primaryBooking.resourceId === 'biblioteca'
+                              ? 'book'
+                              : 'flask'
+                          }
+                          className="w-5 h-5"
+                        />
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                          {primaryBooking.resourceType === 'equipamento' ? 'Equipamento' : 'Ambiente'}
+                        </span>
+                        <h4 className="font-extrabold text-sm sm:text-base text-slate-900 truncate">
+                          {primaryBooking.resourceName}
+                        </h4>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Multiple Items in Same Reservation */
+                    <div className="p-3 rounded-2xl bg-indigo-50/80 border-2 border-indigo-200 mb-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700 flex items-center gap-1">
+                          <Layers className="w-3.5 h-3.5 text-indigo-600" />
+                          {res.bookings.length} Equipamentos Juntos
+                        </span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-200 text-indigo-900">
+                          Reserva Única
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {res.bookings.map((b) => (
+                          <span
+                            key={b.id}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white border border-indigo-200 text-xs font-bold text-slate-800 shadow-2xs"
+                          >
+                            <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                            <span>{b.resourceName}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Schedule details & notes */}
+                  <div className="space-y-1.5 text-xs">
+                    {res.schedule && res.schedule.length > 0 ? (
+                      <div className="pt-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
+                          Grade Atrelada:
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {res.schedule.map((s) => (
+                            <span
+                              key={s.aula}
+                              className="px-2 py-0.5 rounded-md bg-violet-50 text-violet-900 border border-violet-100 font-bold text-[11px] flex items-center gap-1"
+                            >
+                              <span>{s.aula}</span>
+                              <span className="text-violet-400">➔</span>
+                              <span className="text-violet-700">Sala {s.classroom}</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 text-cyan-800 font-bold">
+                          <Clock className="w-3.5 h-3.5 text-cyan-600 shrink-0" />
+                          <span className="truncate">
+                            Aulas: {res.aulas?.join(', ') || '1ª e 2ª Aula'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-violet-800 font-bold">
+                          <MapPin className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+                          <span className="truncate">Sala(s): {roomsDisplay}</span>
+                        </div>
+                      </>
+                    )}
+
+                    {res.notes && (
+                      <div className="mt-2 p-2 rounded-xl bg-slate-50 text-[11px] text-slate-600 italic">
+                        &ldquo;{res.notes}&rdquo;
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bottom Actions */}
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onViewReceipt(primaryBooking)}
+                    className="flex-1 py-2 px-3 rounded-xl bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Ver agendamento</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setDeleteConfirmId(res.groupId)}
+                    title="Cancelar este agendamento"
+                    className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Inline Confirmation for Deletion */}
+                {deleteConfirmId === res.groupId && (
+                  <div className="mt-3 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs">
+                    <p className="font-bold flex items-center gap-1.5">
+                      <AlertTriangle className="w-4 h-4 text-rose-600" />
+                      Cancelar esta reserva?
+                    </p>
+                    <p className="text-[11px] text-rose-700 mt-1">
+                      {res.bookings.length > 1
+                        ? `Todos os ${res.bookings.length} equipamentos e as salas desta reserva ficarão livres.`
+                        : 'O item e as salas ficarão livres nestas aulas.'}
+                    </p>
+                    <div className="mt-2.5 flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => setDeleteConfirmId(null)}
+                        className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 font-bold text-[11px] cursor-pointer"
+                      >
+                        Manter
+                      </button>
+                      <button
+                        onClick={() => handleDelete(res.groupId)}
+                        className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-[11px] shadow-xs cursor-pointer"
+                      >
+                        Sim, Cancelar
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       ) : (
+        /* ================= INDIVIDUAL ITEMS MODE ================= */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {filteredBookings.map((b) => {
             const turnoCfg = TURNO_CONFIG[b.turno];

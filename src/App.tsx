@@ -6,7 +6,11 @@ import { ReservationsList } from './components/ReservationsList';
 import { BookingReceiptModal } from './components/BookingReceiptModal';
 import { DatabaseTestModal } from './components/DatabaseTestModal';
 import { Booking, Turno } from './types/booking';
-import { getStoredBookings, getTodayDateString } from './services/storageService';
+import {
+  getStoredBookings,
+  getTodayDateString,
+  groupBookingsByReservation,
+} from './services/storageService';
 import { ShieldCheck, School, Sparkles, Clock, Database } from 'lucide-react';
 
 export default function App() {
@@ -36,7 +40,8 @@ export default function App() {
   }, []);
 
   const today = getTodayDateString();
-  const todayBookingsCount = bookings.filter((b) => b.date === today).length;
+  const todayReservationsCount = groupBookingsByReservation(bookings.filter((b) => b.date === today)).length;
+  const totalReservationsCount = groupBookingsByReservation(bookings).length;
 
   const handleBookingSuccess = (newBookings: Booking[]) => {
     refreshBookings();
@@ -72,8 +77,8 @@ export default function App() {
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        totalBookingsCount={bookings.length}
-        todayBookingsCount={todayBookingsCount}
+        totalBookingsCount={totalReservationsCount}
+        todayBookingsCount={todayReservationsCount}
       />
 
       {/* Main Content Area */}

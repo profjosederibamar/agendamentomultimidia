@@ -96,6 +96,8 @@ export const BookingForm: React.FC<BookingFormProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<'all' | ItemType>('all');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeBookings, setActiveBookings] = useState<Booking[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isMultiSelectEnabled, setIsMultiSelectEnabled] = useState(false);
 
   // Valid rooms for current shift
   const validRooms = useMemo(() => CLASSROOMS_BY_TURNO[turno] || [], [turno]);
@@ -178,17 +180,38 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     return list;
   }, [aulaActiveMap, aulaRoomMap, validRooms]);
 
-  // Toggle resource multi-selection with STRICT CONFLICT ZERO PREVENTION
+  // Select resource with STRICT CONFLICT ZERO PREVENTION
   const handleToggleResource = (resource: BookingResource) => {
     setErrorMessage(null);
 
-    // If already selected, allow unselecting
+    // Single-select mode (default): Clicking switches directly to this item
+    if (!isMultiSelectEnabled) {
+      if (selectedResourceIds.length === 1 && selectedResourceIds[0] === resource.id) {
+        setSelectedResourceIds([]);
+        return;
+      }
+
+      // Check conflict
+      const conflict = resourceConflictInfo.get(resource.id);
+      if (conflict) {
+        const bookedTeacher = conflict.conflictingBookings[0];
+        setErrorMessage(
+          `🚫 CONFLITO ZERO: O item "${resource.name}" NÃO PODE ser agendado porque já está reservado na ${conflict.occupiedAulas.join(', ')} por ${bookedTeacher?.teacherName} (${bookedTeacher?.curriculumComponent} - Salas ${bookedTeacher?.classrooms?.join(', ') || bookedTeacher?.classroom}). Desmarque essa aula ou escolha outro equipamento livre.`
+        );
+        return;
+      }
+
+      setSelectedResourceIds([resource.id]);
+      return;
+    }
+
+    // Multi-select mode (when explicitly enabled)
     if (selectedResourceIds.includes(resource.id)) {
       setSelectedResourceIds((prev) => prev.filter((id) => id !== resource.id));
       return;
     }
 
-    // Check if resource has conflict in any active aula
+    // Check conflict
     const conflict = resourceConflictInfo.get(resource.id);
     if (conflict) {
       const bookedTeacher = conflict.conflictingBookings[0];
@@ -388,8 +411,9 @@ export const BookingForm: React.FC<BookingFormProps> = ({
     });
   }, [resourceConflictInfo]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMessage(null);
 
     // Validation
@@ -426,26 +450,31 @@ export const BookingForm: React.FC<BookingFormProps> = ({
       return;
     }
 
-    // Submit batch booking with linked schedule
-    const result = createScheduleBatchBooking({
-      resourceIds: selectedResourceIds,
-      date,
-      turno,
-      schedule: activeSchedule,
-      teacherName: teacherName.trim(),
-      curriculumComponent: curriculumComponent.trim(),
-      notes: notes.trim(),
-    });
+    setIsSubmitting(true);
+    try {
+      // Submit batch booking with linked schedule
+      const result = createScheduleBatchBooking({
+        resourceIds: selectedResourceIds,
+        date,
+        turno,
+        schedule: activeSchedule,
+        teacherName: teacherName.trim(),
+        curriculumComponent: curriculumComponent.trim(),
+        notes: notes.trim(),
+      });
 
-    if (!result.success) {
-      setErrorMessage(result.error || 'Não foi possível concluir o agendamento.');
-      return;
-    }
+      if (!result.success) {
+        setErrorMessage(result.error || 'Não foi possível concluir o agendamento.');
+        return;
+      }
 
-    if (result.createdBookings && result.createdBookings.length > 0) {
-      setSelectedResourceIds([]);
-      setNotes('');
-      onBookingSuccess(result.createdBookings);
+      if (result.createdBookings && result.createdBookings.length > 0) {
+        setSelectedResourceIds([]);
+        setNotes('');
+        onBookingSuccess(result.createdBookings);
+      }
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -862,16 +891,37 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               <div>
                 <h3 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
                   <Layers className="w-5 h-5 text-emerald-600" />
-                  Quais Equipamentos ou Ambientes levar?
+                  Qual Equipamento ou Ambiente?
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Marque um ou mais itens que acompanharão você nas aulas escolhidas.
+                  {isMultiSelectEnabled
+                    ? 'Multi-seleção ativa: toque nos itens que deseja reservar juntos.'
+                    : 'Toque para escolher o item desejado (seleção única).'}
                 </p>
               </div>
             </div>
 
-            {/* Category filter tabs & count */}
+            {/* Category filter tabs, multi-select toggle & count */}
             <div className="flex items-center gap-2 flex-wrap">
+              {/* Multi-select toggle */}
+              <button
+                type="button"
+                onClick={() => {
+                  const nextState = !isMultiSelectEnabled;
+                  setIsMultiSelectEnabled(nextState);
+                  if (!nextState && selectedResourceIds.length > 1) {
+                    setSelectedResourceIds([selectedResourceIds[0]]);
+                  }
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                  isMultiSelectEnabled
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                }`}
+              >
+                <span>{isMultiSelectEnabled ? '✓ Multi-seleção Ativada' : '➕ Selecionar Vários Itens'}</span>
+              </button>
+
               <div className="flex items-center p-1 bg-slate-100 rounded-2xl">
                 <button
                   type="button"
@@ -1201,6 +1251,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
               <button
                 type="submit"
                 disabled={
+                  isSubmitting ||
                   selectedResourceIds.length === 0 ||
                   activeSchedule.length === 0 ||
                   !teacherName.trim() ||
@@ -1212,14 +1263,17 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                   activeSchedule.length > 0 &&
                   teacherName.trim() &&
                   curriculumComponent.trim() &&
-                  !hasAnyConflict
+                  !hasAnyConflict &&
+                  !isSubmitting
                     ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/30 scale-100 hover:scale-[1.02] active:scale-[0.98]'
                     : hasAnyConflict
                     ? 'bg-rose-950 text-rose-300 border border-rose-700 cursor-not-allowed opacity-90'
                     : 'bg-slate-700 text-slate-400 cursor-not-allowed opacity-60'
                 }`}
               >
-                {hasAnyConflict ? (
+                {isSubmitting ? (
+                  <span>GRAVANDO AGENDAMENTO...</span>
+                ) : hasAnyConflict ? (
                   <>
                     <Lock className="w-5 h-5 text-rose-400" />
                     <span>RESOLVA OS CONFLITOS PARA AGENDAR</span>
@@ -1256,6 +1310,7 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             <button
               type="submit"
               disabled={
+                isSubmitting ||
                 selectedResourceIds.length === 0 ||
                 activeSchedule.length === 0 ||
                 !teacherName.trim() ||
@@ -1267,14 +1322,17 @@ export const BookingForm: React.FC<BookingFormProps> = ({
                 activeSchedule.length > 0 &&
                 teacherName.trim() &&
                 curriculumComponent.trim() &&
-                !hasAnyConflict
+                !hasAnyConflict &&
+                !isSubmitting
                   ? 'bg-emerald-600 text-white shadow-emerald-200'
                   : hasAnyConflict
                   ? 'bg-rose-600 text-white shadow-rose-200 cursor-not-allowed'
                   : 'bg-slate-300 text-slate-500 cursor-not-allowed'
               }`}
             >
-              {hasAnyConflict ? (
+              {isSubmitting ? (
+                <span>Salvando...</span>
+              ) : hasAnyConflict ? (
                 <>
                   <Lock className="w-4 h-4" />
                   <span>Conflito</span>

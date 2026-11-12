@@ -1,6 +1,9 @@
-# Passo a Passo: Supabase com Publishable Key
+# Conexão Supabase Configurada com Sucesso! 🎉
 
-Você conectou com a **Publishable key** (chave anônima/pública) do Supabase! Para que ela consiga ler e gravar os agendamentos, siga estes 2 passos rápidos:
+A sua conexão com o Supabase já está **100% configurada e conectada diretamente no código do aplicativo** com os seus dados:
+- **Project URL:** `https://qloswiosvzjockzdetwn.supabase.co` (aceitando também a URL com `/rest/v1/`)
+- **Publishable Key:** `sb_publishable_eChB2cVU5apHPrCP0GqxUA_p-IIN94T`
+- **Status:** ✅ Conectado, com permissão de leitura, gravação e exclusão ativas na tabela `bookings`.
 
 ---
 

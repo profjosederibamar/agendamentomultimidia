@@ -6,6 +6,7 @@ import {
   fetchBookingsFromSupabase,
   insertBookingsToSupabase,
   deleteBookingFromSupabase,
+  deleteBookingGroupFromSupabase,
 } from '../lib/supabase.ts';
 
 const STORAGE_KEY = 'escola_agendamentos_v3';
@@ -145,7 +146,46 @@ async function getAuthHeader(): Promise<Record<string, string>> {
 }
 
 /**
- * Read bookings synchronously from localStorage cache
+ * Deduplicate bookings by ID and logical uniqueness (same resource, date, turno, teacher, schedule)
+ */
+export const deduplicateBookings = (list: Booking[]): Booking[] => {
+  if (!Array.isArray(list)) return [];
+  const idMap = new Map<string, Booking>();
+  const logicalMap = new Map<string, Booking>();
+
+  for (const b of list) {
+    if (!b || !b.id) continue;
+
+    // 1. Check exact ID duplicate
+    if (idMap.has(b.id)) {
+      continue;
+    }
+
+    // 2. Check logical duplicate
+    const teacherNorm = (b.teacherName || '').trim().toLowerCase();
+    const scheduleStr = (b.schedule || [])
+      .map((s) => `${s.aula}@${s.classroom}`)
+      .sort()
+      .join('|');
+    const aulasStr = (b.aulas || []).sort().join('|');
+    const logicalKey = `${b.resourceId}#${b.date}#${b.turno}#${teacherNorm}#${scheduleStr || aulasStr}`;
+
+    if (logicalMap.has(logicalKey)) {
+      continue;
+    }
+
+    idMap.set(b.id, b);
+    logicalMap.set(logicalKey, b);
+  }
+
+  return Array.from(idMap.values()).sort((a, b) => {
+    if (b.date !== a.date) return b.date.localeCompare(a.date);
+    return (b.createdAt || '').localeCompare(a.createdAt || '');
+  });
+};
+
+/**
+ * Read bookings synchronously from localStorage cache with deduplication
  */
 export const getStoredBookings = (): Booking[] => {
   try {
@@ -159,7 +199,7 @@ export const getStoredBookings = (): Booking[] => {
     if (!Array.isArray(parsed)) return [];
 
     // Normalize backward compatibility
-    return parsed.map((b) => {
+    const normalized = parsed.map((b) => {
       const aulas = b.aulas || ['1ª Aula', '2ª Aula'];
       const classrooms = b.classrooms || (b.classroom ? [b.classroom] : ['13.01']);
       const schedule: AulaRoomAssignment[] =
@@ -176,6 +216,8 @@ export const getStoredBookings = (): Booking[] => {
         aulas,
       };
     });
+
+    return deduplicateBookings(normalized);
   } catch (err) {
     console.error('Erro ao ler agendamentos:', err);
     return [];
@@ -186,50 +228,49 @@ export const getStoredBookings = (): Booking[] => {
  * Save bookings to local storage and notify listeners
  */
 export const saveBookings = (bookings: Booking[]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(bookings));
+  const deduped = deduplicateBookings(bookings);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(deduped));
   window.dispatchEvent(new Event('escola_bookings_updated'));
 };
 
 /**
- * Sync bookings with Cloud SQL backend
+ * Sync bookings with Supabase / Cloud SQL backend without duplicating records
  */
 export const syncBookingsWithServer = async (): Promise<Booking[]> => {
-  // If Supabase is configured via Publishable key, prefer direct Supabase sync!
+  const current = getStoredBookings();
+  const nonDemoLocal = current.filter((b) => !b.id.startsWith('demo-'));
+
+  // 1. If Supabase is configured via Publishable key, prefer direct Supabase sync!
   if (isSupabaseConfigured()) {
     try {
       const supaBookings = await fetchBookingsFromSupabase();
       if (Array.isArray(supaBookings) && supaBookings.length > 0) {
-        saveBookings(supaBookings);
-        return supaBookings;
+        // Merge Supabase bookings with any local bookings not yet synced
+        const merged = deduplicateBookings([...supaBookings, ...nonDemoLocal]);
+        saveBookings(merged);
+        return merged;
       }
     } catch (err) {
       console.warn('Aviso: falha ao sincronizar via Supabase JS Client:', err);
     }
   }
 
+  // 2. Fallback or parallel Cloud SQL API endpoint
   try {
     const res = await fetch('/api/bookings');
     if (res.ok) {
       const serverBookings: Booking[] = await res.json();
       if (Array.isArray(serverBookings) && serverBookings.length > 0) {
-        saveBookings(serverBookings);
-        return serverBookings;
-      } else if (Array.isArray(serverBookings) && serverBookings.length === 0) {
-        // If server database is completely empty on fresh setup, seed initial demo bookings to Cloud SQL
-        const seed = getStoredBookings();
-        if (seed.length > 0) {
-          await fetch('/api/bookings/batch', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ bookings: seed }),
-          }).catch(() => {});
-        }
+        const merged = deduplicateBookings([...serverBookings, ...nonDemoLocal]);
+        saveBookings(merged);
+        return merged;
       }
     }
   } catch (err) {
     console.warn('Servidor offline ou inicializando, usando cache local:', err);
   }
-  return getStoredBookings();
+
+  return deduplicateBookings(current);
 };
 
 // Initiate server sync on file load in browser
@@ -442,7 +483,9 @@ export const createScheduleBatchBooking = (
   }
 
   const current = getStoredBookings();
-  const updated = [...newBookings, ...current];
+  // Clear out initial demo seed items once teacher creates real bookings
+  const nonDemoCurrent = current.filter((b) => !b.id.startsWith('demo-'));
+  const updated = deduplicateBookings([...newBookings, ...nonDemoCurrent]);
   saveBookings(updated);
 
   saveTeacherProfile({
@@ -488,34 +531,151 @@ export const createScheduleBatchBooking = (
 
 export const deleteBooking = (id: string): boolean => {
   const current = getStoredBookings();
+  const target = current.find((b) => b.id === id);
+  if (!target) return false;
+
+  // If this booking is part of a batch group, delete all items of the reservation group!
+  if (target.groupId) {
+    return deleteBookingGroup(target.groupId);
+  }
+
   const filtered = current.filter((b) => b.id !== id);
-  if (filtered.length !== current.length) {
-    saveBookings(filtered);
+  saveBookings(filtered);
 
-    // Asynchronously delete from Supabase and Cloud SQL database
-    (async () => {
-      if (isSupabaseConfigured()) {
-        try {
-          await deleteBookingFromSupabase(id);
-        } catch (e) {
-          console.warn('Falha ao excluir diretamente no Supabase:', e);
-        }
-      }
-
+  // Asynchronously delete from Supabase and Cloud SQL database
+  (async () => {
+    if (isSupabaseConfigured()) {
       try {
-        const authHeader = await getAuthHeader();
-        await fetch(`/api/bookings/${id}`, {
+        await deleteBookingFromSupabase(id);
+      } catch (e) {
+        console.warn('Falha ao excluir diretamente no Supabase:', e);
+      }
+    }
+
+    try {
+      const authHeader = await getAuthHeader();
+      await fetch(`/api/bookings/${id}`, {
+        method: 'DELETE',
+        headers: { ...authHeader },
+      });
+    } catch (err) {
+      console.warn('Aviso: falha ao excluir no banco de dados:', err);
+    }
+  })();
+
+  return true;
+};
+
+/**
+ * Delete an entire reservation group (all equipments booked together)
+ */
+export const deleteBookingGroup = (groupId: string): boolean => {
+  const current = getStoredBookings();
+  const toDelete = current.filter((b) => b.groupId === groupId || b.id === groupId);
+  if (toDelete.length === 0) return false;
+
+  const filtered = current.filter((b) => b.groupId !== groupId && b.id !== groupId);
+  saveBookings(filtered);
+
+  // Asynchronously delete all items from Supabase and Cloud SQL
+  (async () => {
+    if (isSupabaseConfigured()) {
+      try {
+        await deleteBookingGroupFromSupabase(groupId);
+        // Also ensure any individual IDs are removed
+        for (const item of toDelete) {
+          await deleteBookingFromSupabase(item.id).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Falha ao excluir grupo no Supabase:', e);
+      }
+    }
+
+    try {
+      const authHeader = await getAuthHeader();
+      for (const item of toDelete) {
+        await fetch(`/api/bookings/${item.id}`, {
           method: 'DELETE',
           headers: { ...authHeader },
-        });
-      } catch (err) {
-        console.warn('Aviso: falha ao excluir no banco de dados:', err);
+        }).catch(() => {});
       }
-    })();
+    } catch (err) {
+      console.warn('Aviso: falha ao excluir grupo no banco de dados:', err);
+    }
+  })();
 
-    return true;
+  return true;
+};
+
+export interface GroupedReservation {
+  groupId: string;
+  date: string;
+  turno: Turno;
+  teacherName: string;
+  curriculumComponent: string;
+  notes?: string;
+  createdAt: string;
+  bookings: Booking[];
+  resourceNames: string[];
+  classrooms: string[];
+  schedule: AulaRoomAssignment[];
+  aulas: string[];
+}
+
+/**
+ * Group bookings that belong to the same reservation session
+ */
+export const groupBookingsByReservation = (bookings: Booking[]): GroupedReservation[] => {
+  const groupsMap = new Map<string, GroupedReservation>();
+
+  for (const b of bookings) {
+    // Primary key: groupId if available, otherwise fallback to signature of teacher + date + turno + aulas
+    const scheduleSignature = (b.schedule || [])
+      .map((s) => `${s.aula}@${s.classroom}`)
+      .sort()
+      .join('|');
+    const groupKey =
+      b.groupId ||
+      `sig_${(b.teacherName || '').toLowerCase().trim()}_${b.date}_${b.turno}_${scheduleSignature || (b.aulas || []).join('_')}`;
+
+    let targetGroup = groupsMap.get(groupKey);
+    if (!targetGroup) {
+      targetGroup = {
+        groupId: b.groupId || b.id,
+        date: b.date,
+        turno: b.turno,
+        teacherName: b.teacherName,
+        curriculumComponent: b.curriculumComponent,
+        notes: b.notes,
+        createdAt: b.createdAt,
+        bookings: [],
+        resourceNames: [],
+        classrooms: [...(b.classrooms || (b.classroom ? [b.classroom] : []))],
+        schedule: [...(b.schedule || [])],
+        aulas: [...(b.aulas || [])],
+      };
+      groupsMap.set(groupKey, targetGroup);
+    }
+
+    targetGroup.bookings.push(b);
+    if (!targetGroup.resourceNames.includes(b.resourceName)) {
+      targetGroup.resourceNames.push(b.resourceName);
+    }
+    (b.classrooms || []).forEach((c) => {
+      if (!targetGroup.classrooms.includes(c)) targetGroup.classrooms.push(c);
+    });
+    (b.aulas || []).forEach((a) => {
+      if (!targetGroup.aulas.includes(a)) targetGroup.aulas.push(a);
+    });
+    if (b.notes && !targetGroup.notes) {
+      targetGroup.notes = b.notes;
+    }
   }
-  return false;
+
+  return Array.from(groupsMap.values()).sort((a, b) => {
+    if (b.date !== a.date) return b.date.localeCompare(a.date);
+    return (b.createdAt || '').localeCompare(a.createdAt || '');
+  });
 };
 
 // Teacher memory helper

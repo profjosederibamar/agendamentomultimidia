@@ -239,6 +239,18 @@ export const DatabaseTestModal: React.FC<DatabaseTestModalProps> = ({
     if (isOpen) {
       runTest();
       reloadSupaConfig();
+      const creds = getSupabaseCredentials();
+      if (creds.url && creds.anonKey) {
+        setTestingKey(true);
+        testSupabaseConnection(creds.url, creds.anonKey).then((res) => {
+          setTestingKey(false);
+          setKeyStatus({
+            success: res.success,
+            message: res.message,
+            rlsNeedsPolicy: res.rlsNeedsPolicy,
+          });
+        });
+      }
     }
   }, [isOpen]);
 

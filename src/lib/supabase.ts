@@ -1,6 +1,18 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import type { Booking } from '../types/booking.ts';
 
+export const cleanSupabaseUrl = (rawUrl: string): string => {
+  if (!rawUrl) return '';
+  let cleaned = rawUrl.trim();
+  // Strip trailing slashes
+  cleaned = cleaned.replace(/\/+$/, '');
+  // Strip /rest/v1 or /rest/v1/ if user pasted the REST endpoint
+  cleaned = cleaned.replace(/\/rest\/v1\/?$/, '');
+  // Strip trailing slashes again
+  cleaned = cleaned.replace(/\/+$/, '');
+  return cleaned;
+};
+
 const SUPABASE_URL_KEY = 'escola_supabase_url';
 const SUPABASE_ANON_KEY = 'escola_supabase_anon_key';
 export const DEFAULT_SUPABASE_URL = 'https://qloswiosvzjockzdetwn.supabase.co';
@@ -18,9 +30,12 @@ export const getSupabaseCredentials = (): { url: string; anonKey: string } => {
   const localUrl = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_URL_KEY) || '' : '';
   const localKey = typeof window !== 'undefined' ? localStorage.getItem(SUPABASE_ANON_KEY) || '' : '';
 
+  const rawUrl = localUrl || envUrl || DEFAULT_SUPABASE_URL;
+  const rawKey = localKey || envKey || DEFAULT_SUPABASE_KEY;
+
   return {
-    url: localUrl || envUrl || DEFAULT_SUPABASE_URL,
-    anonKey: localKey || envKey || DEFAULT_SUPABASE_KEY,
+    url: cleanSupabaseUrl(rawUrl),
+    anonKey: rawKey.trim(),
   };
 };
 
@@ -65,7 +80,8 @@ export const isSupabaseConfigured = (): boolean => {
  */
 export const saveSupabaseCredentials = (url: string, anonKey: string) => {
   if (typeof window !== 'undefined') {
-    localStorage.setItem(SUPABASE_URL_KEY, url.trim());
+    const cleaned = cleanSupabaseUrl(url);
+    localStorage.setItem(SUPABASE_URL_KEY, cleaned);
     localStorage.setItem(SUPABASE_ANON_KEY, anonKey.trim());
   }
   cachedClient = null;
@@ -88,11 +104,13 @@ export const clearSupabaseCredentials = () => {
  * Test connectivity with Supabase using URL and Publishable Key
  */
 export const testSupabaseConnection = async (
-  url: string,
-  anonKey: string
+  rawUrl: string,
+  rawKey: string
 ): Promise<{ success: boolean; message: string; tableFound?: boolean; rlsNeedsPolicy?: boolean }> => {
   try {
-    const client = createClient(url.trim(), anonKey.trim());
+    const url = cleanSupabaseUrl(rawUrl);
+    const anonKey = rawKey.trim();
+    const client = createClient(url, anonKey);
 
     // Test querying the bookings table
     const { data, error } = await client
@@ -265,6 +283,28 @@ export const deleteBookingFromSupabase = async (id: string): Promise<boolean> =>
     return true;
   } catch (err) {
     console.error('Falha ao excluir no Supabase:', err);
+    return false;
+  }
+};
+
+/**
+ * Delete an entire booking group from Supabase
+ */
+export const deleteBookingGroupFromSupabase = async (
+  groupId: string
+): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const { error } = await client.from('bookings').delete().eq('group_id', groupId);
+    if (error) {
+      console.error('Erro ao deletar grupo no Supabase:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Falha ao excluir grupo no Supabase:', err);
     return false;
   }
 };
