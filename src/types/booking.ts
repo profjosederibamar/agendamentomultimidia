@@ -15,7 +15,7 @@ export interface BookingResource {
   type: ItemType;
   category: 'Equipamento' | 'Ambiente';
   description: string;
-  iconName: 'laptop' | 'tv' | 'projector' | 'speaker' | 'sun' | 'book' | 'flask';
+  iconName: 'laptop' | 'tv' | 'projector' | 'speaker' | 'sun' | 'book' | 'flask' | 'school';
   color: string;
 }
 

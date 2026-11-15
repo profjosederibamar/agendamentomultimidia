@@ -183,6 +183,8 @@ export const BookingReceiptModal: React.FC<BookingReceiptModalProps> = ({
                         ? 'sun'
                         : item.resourceId === 'biblioteca'
                         ? 'book'
+                        : item.resourceId === 'sala_aula'
+                        ? 'school'
                         : 'flask'
                     }
                     className="w-5 h-5"

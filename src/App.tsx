@@ -5,6 +5,7 @@ import { DayBoardView } from './components/DayBoardView';
 import { ReservationsList } from './components/ReservationsList';
 import { BookingReceiptModal } from './components/BookingReceiptModal';
 import { DatabaseTestModal } from './components/DatabaseTestModal';
+import { AuthModal } from './components/AuthModal';
 import { Booking, Turno } from './types/booking';
 import {
   getStoredBookings,
@@ -22,11 +23,18 @@ export default function App() {
   const [preselectedTurno, setPreselectedTurno] = useState<Turno | undefined>(undefined);
   const [preselectedResourceId, setPreselectedResourceId] = useState<string | undefined>(undefined);
 
-  // Modal receipt state
+  // Modal receipt & auth state
   const [selectedReceiptBooking, setSelectedReceiptBooking] = useState<Booking | null>(null);
   const [batchBookings, setBatchBookings] = useState<Booking[]>([]);
   const [isJustCreatedReceipt, setIsJustCreatedReceipt] = useState(false);
   const [isDbTestOpen, setIsDbTestOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'forgot'>('login');
+
+  const openAuthModal = (mode: 'login' | 'register' | 'forgot' = 'login') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  };
 
   // Refresh bookings from storage
   const refreshBookings = () => {
@@ -79,6 +87,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         totalBookingsCount={totalReservationsCount}
         todayBookingsCount={todayReservationsCount}
+        onOpenAuth={() => openAuthModal('login')}
       />
 
       {/* Main Content Area */}
@@ -89,6 +98,8 @@ export default function App() {
             preselectedDate={preselectedDate}
             preselectedTurno={preselectedTurno}
             preselectedResourceId={preselectedResourceId}
+            onOpenAuth={openAuthModal}
+            onViewBoard={() => setActiveTab('board')}
           />
         )}
 
@@ -106,6 +117,7 @@ export default function App() {
             onViewReceipt={handleViewReceipt}
             onNewBookingClick={() => setActiveTab('form')}
             onGoHome={() => setActiveTab('form')}
+            onOpenAuth={() => openAuthModal('login')}
           />
         )}
       </main>
@@ -212,6 +224,13 @@ export default function App() {
       <DatabaseTestModal
         isOpen={isDbTestOpen}
         onClose={() => setIsDbTestOpen(false)}
+      />
+
+      {/* Email & Google Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        initialMode={authModalMode}
       />
     </div>
   );

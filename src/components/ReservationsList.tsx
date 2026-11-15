@@ -27,12 +27,14 @@ import {
   GroupedReservation,
 } from '../services/storageService';
 import { ResourceIcon } from './ResourceIcon';
+import { useAuth } from '../context/AuthContext.tsx';
 
 interface ReservationsListProps {
   bookings: Booking[];
   onViewReceipt: (booking: Booking) => void;
   onNewBookingClick: () => void;
   onGoHome?: () => void;
+  onOpenAuth?: () => void;
 }
 
 export const ReservationsList: React.FC<ReservationsListProps> = ({
@@ -40,7 +42,9 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
   onViewReceipt,
   onNewBookingClick,
   onGoHome,
+  onOpenAuth,
 }) => {
+  const { user } = useAuth();
   const today = getTodayDateString();
 
   // Filters
@@ -108,8 +112,20 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
   }, [filteredBookings]);
 
   const handleDelete = (idOrGroupId: string) => {
+    if (!user) {
+      onOpenAuth?.();
+      return;
+    }
     deleteBooking(idOrGroupId);
     setDeleteConfirmId(null);
+  };
+
+  const handleRequestDelete = (idOrGroupId: string) => {
+    if (!user) {
+      onOpenAuth?.();
+      return;
+    }
+    setDeleteConfirmId(idOrGroupId);
   };
 
   const handleExportJSON = () => {
@@ -462,6 +478,8 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
                               ? 'sun'
                               : primaryBooking.resourceId === 'biblioteca'
                               ? 'book'
+                              : primaryBooking.resourceId === 'sala_aula'
+                              ? 'school'
                               : 'flask'
                           }
                           className="w-5 h-5"
@@ -560,8 +578,8 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setDeleteConfirmId(res.groupId)}
-                    title="Cancelar este agendamento"
+                    onClick={() => handleRequestDelete(res.groupId)}
+                    title={user ? 'Cancelar este agendamento' : 'Faça login para cancelar'}
                     className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-all cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -686,6 +704,8 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
                             ? 'sun'
                             : b.resourceId === 'biblioteca'
                             ? 'book'
+                            : b.resourceId === 'sala_aula'
+                            ? 'school'
                             : 'flask'
                         }
                         className="w-5 h-5"
@@ -761,8 +781,8 @@ export const ReservationsList: React.FC<ReservationsListProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => setDeleteConfirmId(b.id)}
-                    title="Cancelar este agendamento"
+                    onClick={() => handleRequestDelete(b.id)}
+                    title={user ? 'Cancelar este agendamento' : 'Faça login para cancelar'}
                     className="p-2 rounded-xl text-rose-500 hover:bg-rose-50 hover:text-rose-700 transition-all cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />

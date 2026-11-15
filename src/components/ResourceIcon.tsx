@@ -1,5 +1,5 @@
 import React from 'react';
-import { Laptop, Tv, Projector, Volume2, Sun, BookOpen, FlaskConical } from 'lucide-react';
+import { Laptop, Tv, Projector, Volume2, Sun, BookOpen, FlaskConical, School } from 'lucide-react';
 
 interface ResourceIconProps {
   iconName: string;
@@ -22,6 +22,8 @@ export const ResourceIcon: React.FC<ResourceIconProps> = ({ iconName, className 
       return <BookOpen className={className} />;
     case 'flask':
       return <FlaskConical className={className} />;
+    case 'school':
+      return <School className={className} />;
     default:
       return <Laptop className={className} />;
   }

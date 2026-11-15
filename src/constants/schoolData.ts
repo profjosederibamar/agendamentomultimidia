@@ -155,6 +155,15 @@ export const SCHOOL_RESOURCES: BookingResource[] = [
     iconName: 'flask',
     color: 'cyan',
   },
+  {
+    id: 'sala_aula',
+    name: 'Sala de Aula',
+    type: 'ambiente',
+    category: 'Ambiente',
+    description: 'Sala de aula para atividades pedagógicas, apresentações ou aulas extras.',
+    iconName: 'school',
+    color: 'teal',
+  },
 ];
 
 // Suggested common subjects to make typing even easier and faster:

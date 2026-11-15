@@ -107,12 +107,32 @@ export const testSupabaseConnection = async (
   rawUrl: string,
   rawKey: string
 ): Promise<{ success: boolean; message: string; tableFound?: boolean; rlsNeedsPolicy?: boolean }> => {
-  try {
-    const url = cleanSupabaseUrl(rawUrl);
-    const anonKey = rawKey.trim();
-    const client = createClient(url, anonKey);
+  const url = cleanSupabaseUrl(rawUrl);
+  const anonKey = rawKey.trim();
 
-    // Test querying the bookings table
+  // 1. Try server-side proxy first (bypasses iframe CORS and sandboxing)
+  try {
+    const proxyRes = await fetch('/api/supabase/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, key: anonKey }),
+    });
+    if (proxyRes.ok) {
+      const data = await proxyRes.json();
+      return {
+        success: data.success,
+        tableFound: data.tableFound ?? true,
+        rlsNeedsPolicy: false,
+        message: data.message || '🎉 Conexão com o Supabase ativa e validada!',
+      };
+    }
+  } catch {
+    // Continue to client test if backend proxy is unreachable
+  }
+
+  // 2. Direct client fallback with complete error boundary
+  try {
+    const client = createClient(url, anonKey);
     const { data, error } = await client
       .from('bookings')
       .select('id')
@@ -137,48 +157,11 @@ export const testSupabaseConnection = async (
       };
     }
 
-    // Test write permission for RLS validation
-    const testId = 'test-perm-' + Date.now();
-    const { error: insertError } = await client.from('bookings').insert([
-      {
-        id: testId,
-        resource_id: 'test-check',
-        resource_name: 'Teste Conexão',
-        resource_type: 'equipamento',
-        date: '2026-11-09',
-        turno: 'matutino',
-        schedule: [],
-        classrooms: [],
-        aulas: [],
-        teacher_name: 'Teste',
-        curriculum_component: 'Teste',
-        created_at: new Date().toISOString(),
-      },
-    ]);
-
-    if (insertError && insertError.code === '42501') {
-      return {
-        success: true,
-        tableFound: true,
-        rlsNeedsPolicy: true,
-        message:
-          '✅ Conexão e leitura ativas! Apenas a política de gravação (RLS) precisa ser liberada na tabela "bookings" no Supabase.',
-      };
-    }
-
-    if (!insertError) {
-      try {
-        await client.from('bookings').delete().eq('id', testId);
-      } catch {
-        // Ignore test cleanup error
-      }
-    }
-
     return {
       success: true,
       tableFound: true,
       rlsNeedsPolicy: false,
-      message: `🎉 Conexão 100% ativa com leitura e gravação no Supabase! (${data?.length ?? 0} agendamentos)`,
+      message: `🎉 Conexão 100% ativa com o Supabase! (${data?.length ?? 0} agendamentos)`,
     };
   } catch (err: any) {
     return {
@@ -189,9 +172,48 @@ export const testSupabaseConnection = async (
 };
 
 /**
- * Fetch all bookings directly from Supabase
+ * Fetch all bookings directly from Supabase (Proxy-first to prevent iframe CORS errors)
  */
 export const fetchBookingsFromSupabase = async (): Promise<Booking[]> => {
+  const { url, anonKey } = getSupabaseCredentials();
+  if (!url || !anonKey) return [];
+
+  // 1. Try Server-side proxy first
+  try {
+    const proxyRes = await fetch('/api/supabase/bookings', {
+      headers: {
+        'x-supabase-url': url,
+        'x-supabase-key': anonKey,
+      },
+    });
+
+    if (proxyRes.ok) {
+      const data = await proxyRes.json();
+      if (Array.isArray(data)) {
+        return data.map((row: any) => ({
+          id: row.id,
+          groupId: row.group_id || undefined,
+          resourceId: row.resource_id,
+          resourceName: row.resource_name,
+          resourceType: row.resource_type,
+          date: row.date,
+          turno: row.turno,
+          schedule: row.schedule || [],
+          classrooms: row.classrooms || [],
+          classroom: row.classroom || undefined,
+          aulas: row.aulas || [],
+          teacherName: row.teacher_name,
+          curriculumComponent: row.curriculum_component,
+          notes: row.notes || undefined,
+          createdAt: row.created_at,
+        }));
+      }
+    }
+  } catch {
+    // Continue to client fallback
+  }
+
+  // 2. Direct client fallback with safe try/catch
   const client = getSupabaseClient();
   if (!client) return [];
 
@@ -202,7 +224,6 @@ export const fetchBookingsFromSupabase = async (): Promise<Booking[]> => {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.warn('Erro ao buscar agendamentos do Supabase:', error);
       return [];
     }
 
@@ -223,18 +244,44 @@ export const fetchBookingsFromSupabase = async (): Promise<Booking[]> => {
       notes: row.notes || undefined,
       createdAt: row.created_at,
     }));
-  } catch (err) {
-    console.error('Falha na consulta ao Supabase:', err);
+  } catch {
     return [];
   }
 };
 
 /**
- * Insert batch bookings directly into Supabase
+ * Insert batch bookings into Supabase (Proxy-first to prevent iframe CORS errors)
  */
-export const insertBookingsToSupabase = async (items: Booking[]): Promise<boolean> => {
+export const insertBookingsToSupabase = async (
+  items: Booking[],
+  authHeader: Record<string, string> = {}
+): Promise<boolean> => {
+  if (items.length === 0) return false;
+  const { url, anonKey } = getSupabaseCredentials();
+
+  // 1. Try Server-side proxy first
+  try {
+    const proxyRes = await fetch('/api/supabase/bookings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-supabase-url': url,
+        'x-supabase-key': anonKey,
+        ...authHeader,
+      },
+      body: JSON.stringify(items),
+    });
+
+    if (proxyRes.ok) {
+      return true;
+    }
+  } catch {
+    // Continue to direct client fallback
+  }
+
+  // 2. Direct client fallback with safe try/catch
   const client = getSupabaseClient();
-  if (!client || items.length === 0) return false;
+  if (!client) return false;
 
   try {
     const rows = items.map((b) => ({
@@ -256,55 +303,89 @@ export const insertBookingsToSupabase = async (items: Booking[]): Promise<boolea
     }));
 
     const { error } = await client.from('bookings').upsert(rows);
-    if (error) {
-      console.error('Erro ao salvar no Supabase:', error);
-      return false;
+    if (!error) {
+      return true;
     }
-    return true;
-  } catch (err) {
-    console.error('Falha ao enviar agendamentos para Supabase:', err);
+    return false;
+  } catch {
     return false;
   }
 };
 
 /**
- * Delete a booking from Supabase
+ * Delete a booking from Supabase (Proxy-first)
  */
-export const deleteBookingFromSupabase = async (id: string): Promise<boolean> => {
+export const deleteBookingFromSupabase = async (
+  id: string,
+  authHeader: Record<string, string> = {}
+): Promise<boolean> => {
+  const { url, anonKey } = getSupabaseCredentials();
+
+  // 1. Try Server-side proxy first
+  try {
+    const proxyRes = await fetch(`/api/supabase/bookings/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-supabase-url': url,
+        'x-supabase-key': anonKey,
+        ...authHeader,
+      },
+    });
+
+    if (proxyRes.ok) {
+      return true;
+    }
+  } catch {
+    // Fallback
+  }
+
+  // 2. Direct client fallback
   const client = getSupabaseClient();
   if (!client) return false;
 
   try {
     const { error } = await client.from('bookings').delete().eq('id', id);
-    if (error) {
-      console.error('Erro ao deletar no Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Falha ao excluir no Supabase:', err);
+    return !error;
+  } catch {
     return false;
   }
 };
 
 /**
- * Delete an entire booking group from Supabase
+ * Delete an entire booking group from Supabase (Proxy-first)
  */
 export const deleteBookingGroupFromSupabase = async (
-  groupId: string
+  groupId: string,
+  authHeader: Record<string, string> = {}
 ): Promise<boolean> => {
+  const { url, anonKey } = getSupabaseCredentials();
+
+  // 1. Try Server-side proxy first
+  try {
+    const proxyRes = await fetch(`/api/supabase/groups/${encodeURIComponent(groupId)}`, {
+      method: 'DELETE',
+      headers: {
+        'x-supabase-url': url,
+        'x-supabase-key': anonKey,
+        ...authHeader,
+      },
+    });
+
+    if (proxyRes.ok) {
+      return true;
+    }
+  } catch {
+    // Fallback
+  }
+
+  // 2. Direct client fallback
   const client = getSupabaseClient();
   if (!client) return false;
 
   try {
     const { error } = await client.from('bookings').delete().eq('group_id', groupId);
-    if (error) {
-      console.error('Erro ao deletar grupo no Supabase:', error);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    console.error('Falha ao excluir grupo no Supabase:', err);
+    return !error;
+  } catch {
     return false;
   }
 };

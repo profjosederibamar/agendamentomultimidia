@@ -8,6 +8,7 @@ interface HeaderProps {
   setActiveTab: (tab: 'form' | 'board' | 'list') => void;
   totalBookingsCount: number;
   todayBookingsCount: number;
+  onOpenAuth: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -15,8 +16,9 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   totalBookingsCount,
   todayBookingsCount,
+  onOpenAuth,
 }) => {
-  const { user, signInWithGoogle, logOut } = useAuth();
+  const { user, logOut } = useAuth();
   const [currentDateTime, setCurrentDateTime] = useState(new Date());
 
   useEffect(() => {
@@ -128,7 +130,7 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={signInWithGoogle}
+                onClick={onOpenAuth}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-bold transition-all shadow-2xs hover:shadow-xs cursor-pointer active:scale-95"
               >
                 <LogIn className="w-3.5 h-3.5 text-indigo-600" />

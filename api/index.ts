@@ -29,8 +29,8 @@ app.get('/api/bookings', async (_req: Request, res: Response) => {
   }
 });
 
-// API Route: Create batch bookings
-app.post('/api/bookings/batch', optionalAuth, async (req: AuthRequest, res: Response) => {
+// API Route: Create batch bookings (Authenticated users only)
+app.post('/api/bookings/batch', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { bookings: items, teacherProfile } = req.body;
     if (!Array.isArray(items) || items.length === 0) {
@@ -51,8 +51,8 @@ app.post('/api/bookings/batch', optionalAuth, async (req: AuthRequest, res: Resp
   }
 });
 
-// API Route: Delete booking
-app.delete('/api/bookings/:id', optionalAuth, async (req: Request, res: Response) => {
+// API Route: Delete booking (Authenticated users only)
+app.delete('/api/bookings/:id', requireAuth, async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const success = await deleteBookingById(id);
@@ -93,6 +93,225 @@ app.post('/api/auth/sync', requireAuth, async (req: AuthRequest, res: Response) 
   } catch (error: any) {
     console.error('Error syncing user:', error);
     res.status(500).json({ error: 'Falha ao sincronizar perfil do usuário.' });
+  }
+});
+
+// ==========================================
+// SUPABASE PROXY ENDPOINTS (Prevents iframe CORS / Failed to fetch errors)
+// ==========================================
+const DEFAULT_SUPABASE_URL = 'https://qloswiosvzjockzdetwn.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'sb_publishable_eChB2cVU5apHPrCP0GqxUA_p-IIN94T';
+
+const getEffectiveSupabaseConfig = (req: Request) => {
+  const headerUrl = (req.headers['x-supabase-url'] as string) || '';
+  const headerKey = (req.headers['x-supabase-key'] as string) || '';
+  const envUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+  const envKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || '';
+
+  const rawUrl = headerUrl || envUrl || DEFAULT_SUPABASE_URL;
+  const rawKey = headerKey || envKey || DEFAULT_SUPABASE_KEY;
+
+  let url = rawUrl.trim().replace(/\/+$/, '').replace(/\/rest\/v1\/?$/, '').replace(/\/+$/, '');
+  return { url, key: rawKey.trim() };
+};
+
+// GET /api/supabase/bookings - Fetch all bookings directly from Supabase
+app.get('/api/supabase/bookings', async (req: Request, res: Response) => {
+  const { url, key } = getEffectiveSupabaseConfig(req);
+  if (!url || !key) {
+    return res.status(400).json({ error: 'Configuração do Supabase ausente.' });
+  }
+
+  try {
+    const response = await fetch(`${url}/rest/v1/bookings?select=*&order=created_at.desc`, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn('Supabase fetch error:', response.status, errText);
+      return res.status(response.status).json({
+        error: `Erro ao consultar Supabase (${response.status})`,
+        details: errText,
+      });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    console.error('Falha no proxy Supabase GET:', err);
+    res.status(502).json({ error: 'Falha de comunicação com Supabase', message: err.message });
+  }
+});
+
+// POST /api/supabase/bookings - Upsert batch bookings to Supabase (Authenticated users only)
+app.post('/api/supabase/bookings', requireAuth, async (req: AuthRequest, res: Response) => {
+  const { url, key } = getEffectiveSupabaseConfig(req);
+  if (!url || !key) {
+    return res.status(400).json({ error: 'Configuração do Supabase ausente.' });
+  }
+
+  const rawItems = Array.isArray(req.body) ? req.body : req.body?.bookings || [];
+  if (!Array.isArray(rawItems) || rawItems.length === 0) {
+    return res.status(400).json({ error: 'Nenhum agendamento fornecido.' });
+  }
+
+  const rows = rawItems.map((b: any) => ({
+    id: b.id,
+    group_id: b.groupId || b.group_id || null,
+    resource_id: b.resourceId || b.resource_id,
+    resource_name: b.resourceName || b.resource_name,
+    resource_type: b.resourceType || b.resource_type,
+    date: b.date,
+    turno: b.turno,
+    schedule: b.schedule || [],
+    classrooms: b.classrooms || (b.classroom ? [b.classroom] : []),
+    classroom: b.classroom || null,
+    aulas: b.aulas || [],
+    teacher_name: b.teacherName || b.teacher_name,
+    curriculum_component: b.curriculumComponent || b.curriculum_component,
+    notes: b.notes || null,
+    created_at: b.createdAt || b.created_at || new Date().toISOString(),
+    user_id: req.user?.uid || null,
+  }));
+
+  try {
+    const response = await fetch(`${url}/rest/v1/bookings`, {
+      method: 'POST',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn('Supabase upsert error:', response.status, errText);
+      return res.status(response.status).json({
+        error: `Erro ao salvar no Supabase (${response.status})`,
+        details: errText,
+      });
+    }
+
+    res.status(201).json({ success: true, count: rows.length });
+  } catch (err: any) {
+    console.error('Falha no proxy Supabase POST:', err);
+    res.status(502).json({ error: 'Falha de comunicação com Supabase', message: err.message });
+  }
+});
+
+// DELETE /api/supabase/bookings/:id - Delete single booking (Authenticated users only)
+app.delete('/api/supabase/bookings/:id', requireAuth, async (req: AuthRequest, res: Response) => {
+  const { url, key } = getEffectiveSupabaseConfig(req);
+  const { id } = req.params;
+
+  try {
+    const response = await fetch(`${url}/rest/v1/bookings?id=eq.${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({
+        error: `Erro ao excluir no Supabase (${response.status})`,
+        details: errText,
+      });
+    }
+
+    res.json({ success: true, deletedId: id });
+  } catch (err: any) {
+    console.error('Falha no proxy Supabase DELETE booking:', err);
+    res.status(502).json({ error: 'Falha ao excluir no Supabase', message: err.message });
+  }
+});
+
+// DELETE /api/supabase/groups/:groupId - Delete entire reservation group (Authenticated users only)
+app.delete('/api/supabase/groups/:groupId', requireAuth, async (req: AuthRequest, res: Response) => {
+  const { url, key } = getEffectiveSupabaseConfig(req);
+  const { groupId } = req.params;
+
+  try {
+    const response = await fetch(`${url}/rest/v1/bookings?group_id=eq.${encodeURIComponent(groupId)}`, {
+      method: 'DELETE',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({
+        error: `Erro ao excluir grupo no Supabase (${response.status})`,
+        details: errText,
+      });
+    }
+
+    res.json({ success: true, deletedGroupId: groupId });
+  } catch (err: any) {
+    console.error('Falha no proxy Supabase DELETE group:', err);
+    res.status(502).json({ error: 'Falha ao excluir grupo no Supabase', message: err.message });
+  }
+});
+
+// POST /api/supabase/test - Test connection directly from backend
+app.post('/api/supabase/test', async (req: Request, res: Response) => {
+  const bodyUrl = req.body?.url;
+  const bodyKey = req.body?.key;
+  const { url: configUrl, key: configKey } = getEffectiveSupabaseConfig(req);
+  const url = (bodyUrl || configUrl).trim().replace(/\/+$/, '').replace(/\/rest\/v1\/?$/, '');
+  const key = (bodyKey || configKey).trim();
+
+  const startTime = Date.now();
+  try {
+    const testResponse = await fetch(`${url}/rest/v1/bookings?select=id&limit=1`, {
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+    });
+
+    const latencyMs = Date.now() - startTime;
+    if (testResponse.ok) {
+      const rows = await testResponse.json();
+      return res.json({
+        success: true,
+        tableFound: true,
+        latency: `${latencyMs}ms`,
+        message: `🎉 Conexão 100% ativa com leitura e gravação no Supabase!`,
+        count: Array.isArray(rows) ? rows.length : 0,
+      });
+    }
+
+    const errText = await testResponse.text();
+    if (testResponse.status === 404 || errText.includes('42P01') || errText.includes('not found')) {
+      return res.json({
+        success: true,
+        tableFound: false,
+        latency: `${latencyMs}ms`,
+        message: 'Conexão com Supabase autenticada! Porém a tabela "bookings" ainda não foi criada.',
+      });
+    }
+
+    res.status(testResponse.status).json({
+      success: false,
+      message: `Erro do Supabase: ${errText} (${testResponse.status})`,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Falha ao conectar ao Supabase',
+    });
   }
 });
 

@@ -401,6 +401,12 @@ export interface CreateScheduleBatchBookingInput {
 export const createScheduleBatchBooking = (
   input: CreateScheduleBatchBookingInput
 ): { success: boolean; error?: string; createdBookings?: Booking[] } => {
+  if (!auth.currentUser) {
+    return {
+      success: false,
+      error: 'Apenas professores logados podem fazer agendamentos. Entre com seu e-mail ou Google para continuar.',
+    };
+  }
   if (input.resourceIds.length === 0) {
     return { success: false, error: 'Selecione pelo menos um equipamento ou ambiente.' };
   }
@@ -495,10 +501,12 @@ export const createScheduleBatchBooking = (
 
   // Asynchronously persist to Supabase / Cloud SQL database
   (async () => {
+    const authHeader = await getAuthHeader();
+
     // 1. Direct Supabase Client if configured
     if (isSupabaseConfigured()) {
       try {
-        await insertBookingsToSupabase(newBookings);
+        await insertBookingsToSupabase(newBookings, authHeader);
       } catch (e) {
         console.warn('Falha ao inserir diretamente no Supabase:', e);
       }
@@ -506,7 +514,6 @@ export const createScheduleBatchBooking = (
 
     // 2. Cloud SQL / Vercel API backend
     try {
-      const authHeader = await getAuthHeader();
       await fetch('/api/bookings/batch', {
         method: 'POST',
         headers: {
@@ -530,6 +537,7 @@ export const createScheduleBatchBooking = (
 };
 
 export const deleteBooking = (id: string): boolean => {
+  if (!auth.currentUser) return false;
   const current = getStoredBookings();
   const target = current.find((b) => b.id === id);
   if (!target) return false;
@@ -544,16 +552,16 @@ export const deleteBooking = (id: string): boolean => {
 
   // Asynchronously delete from Supabase and Cloud SQL database
   (async () => {
+    const authHeader = await getAuthHeader();
     if (isSupabaseConfigured()) {
       try {
-        await deleteBookingFromSupabase(id);
+        await deleteBookingFromSupabase(id, authHeader);
       } catch (e) {
         console.warn('Falha ao excluir diretamente no Supabase:', e);
       }
     }
 
     try {
-      const authHeader = await getAuthHeader();
       await fetch(`/api/bookings/${id}`, {
         method: 'DELETE',
         headers: { ...authHeader },
@@ -570,6 +578,7 @@ export const deleteBooking = (id: string): boolean => {
  * Delete an entire reservation group (all equipments booked together)
  */
 export const deleteBookingGroup = (groupId: string): boolean => {
+  if (!auth.currentUser) return false;
   const current = getStoredBookings();
   const toDelete = current.filter((b) => b.groupId === groupId || b.id === groupId);
   if (toDelete.length === 0) return false;
@@ -579,12 +588,13 @@ export const deleteBookingGroup = (groupId: string): boolean => {
 
   // Asynchronously delete all items from Supabase and Cloud SQL
   (async () => {
+    const authHeader = await getAuthHeader();
     if (isSupabaseConfigured()) {
       try {
-        await deleteBookingGroupFromSupabase(groupId);
+        await deleteBookingGroupFromSupabase(groupId, authHeader);
         // Also ensure any individual IDs are removed
         for (const item of toDelete) {
-          await deleteBookingFromSupabase(item.id).catch(() => {});
+          await deleteBookingFromSupabase(item.id, authHeader).catch(() => {});
         }
       } catch (e) {
         console.warn('Falha ao excluir grupo no Supabase:', e);
@@ -592,7 +602,6 @@ export const deleteBookingGroup = (groupId: string): boolean => {
     }
 
     try {
-      const authHeader = await getAuthHeader();
       for (const item of toDelete) {
         await fetch(`/api/bookings/${item.id}`, {
           method: 'DELETE',
